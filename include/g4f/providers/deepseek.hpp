@@ -18,6 +18,12 @@ inline const std::string URL = "https://chat.deepseek.com";
 inline const std::string DOMAIN = "chat.deepseek.com";
 inline const std::string CHAT_SESSION_CREATE_ENDPOINT =
     URL + "/api/v0/chat_session/create";
+inline const std::string CHAT_SESSION_CONTINUE_ENDPOINT =
+    URL + "/api/v0/chat/continue";
+inline const std::string CHAT_SESSION_RESUME_STREAM_ENDPOINT =
+    URL + "/api/v0/chat/resume_stream";
+inline const std::string CHAT_SESSION_DELETE_ENDPOINT =
+    URL + "/api/v0/chat_session/delete";
 inline const std::string CHAT_COMPLETION_ENDPOINT =
     URL + "/api/v0/chat/completion";
 inline const std::string POW_CHALLENGE_ENDPOINT =

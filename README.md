@@ -37,5 +37,6 @@ Deps: libcurl, nlohmann/json (FetchContent if not installed).
 - [x] DeepSeek PoW (`DeepSeekHashV1` via wasm3 + vendored blob; live-solve needs account, manual)
 - [x] DeepSeek SSE frames + stream state machine (fragments, patches, resume)
 - [x] HAR cookie/header auth loading
-- [ ] DeepSeek live session/completion driver (needs account HAR for manual test)
+- [x] DeepSeek live driver (completion/resume/continue loop; offline-verified via scripted transport, live run needs account HAR)
+- [ ] Remaining providers/models (on demand)
 - [ ] remaining providers/models (on demand)

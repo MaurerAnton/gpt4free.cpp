@@ -11,6 +11,7 @@
 #include "g4f/http.hpp"
 #include "g4f/models.hpp"
 #include "g4f/providers/deepseek.hpp"
+#include "g4f/providers/driver.hpp"
 #include "g4f/providers/envelope.hpp"
 #include "g4f/providers/pow.hpp"
 #include "g4f/providers/pow_wasm3.hpp"
@@ -306,6 +307,109 @@ void test_har_auth() {
     CHECK(d.cookies["session"] == "s3cr3t");
 }
 
+struct FakeTransport : g4f::deepseek::ITransport {
+    struct Call { std::string url; std::string body; };
+    std::vector<Call> calls;
+    std::vector<g4f::deepseek::HttpExchange> script;
+    g4f::deepseek::HttpExchange post(const std::string& url, const std::string& body,
+                                     const g4f::Headers&) override {
+        calls.push_back({url, body});
+        if (script.empty()) throw std::runtime_error("fake: script exhausted");
+        auto ex = script.front();
+        script.erase(script.begin());
+        return ex;
+    }
+};
+
+static g4f::deepseek::HttpExchange sse(const std::string& body) {
+    return {200, "text/event-stream", body};
+}
+
+void test_driver_happy_path() {
+    using namespace g4f::deepseek;
+    FakeTransport t;
+    t.script.push_back(sse(
+        "data: {\"v\":{\"response\":{\"message_id\":\"m1\",\"status\":\"WIP\","
+        "\"fragments\":[{\"type\":\"RESPONSE\",\"content\":\"hi\"}]}}}\n\n"
+        "event: close\ndata: {\"auto_resume\":false}\n\n"));
+    StreamConversation conv;
+    nlohmann::json payload = {{"chat_session_id", "s"}, {"prompt", "hi"}};
+    auto events = run_chat_stream(t, payload, {}, conv);
+    CHECK(events.size() == 2);
+    CHECK(!events[0].finish && events[0].text == "hi");
+    // WIP maps to finish reason "wip" upstream (DEEPSEEK_FINISH_REASONS).
+    CHECK(events[1].finish && events[1].reason == "wip");
+    CHECK(t.calls.size() == 1);
+    CHECK(conv.parent_message_id == "m1");
+}
+
+void test_driver_code22() {
+    using namespace g4f::deepseek;
+    FakeTransport t;
+    t.script.push_back({200, "application/json",
+        R"({"code":22,"data":{"biz_data":{"response":{"status":"FINISHED","fragments":[{"type":"RESPONSE","content":"full"}]}}}})"});
+    StreamConversation conv;
+    auto events = run_chat_stream(t, {{"chat_session_id", "s"}}, {}, conv);
+    CHECK(events.size() == 2);
+    CHECK(events[0].text == "full");
+    CHECK(events[1].finish && events[1].reason == "stop");
+}
+
+void test_driver_continue() {
+    using namespace g4f::deepseek;
+    FakeTransport t;
+    t.script.push_back(sse(
+        "data: {\"response_message_id\":\"m9\",\"v\":{\"response\":{\"status\":\"INCOMPLETE\","
+        "\"fragments\":[{\"type\":\"RESPONSE\",\"content\":\"part\"}]}}}\n\n"
+        "event: close\ndata: {}\n\n"));
+    t.script.push_back(sse(
+        "data: {\"v\":{\"response\":{\"status\":\"FINISHED\","
+        "\"fragments\":[{\"type\":\"RESPONSE\",\"content\":\"part two\"}]}}}\n\n"
+        "event: close\ndata: {}\n\n"));
+    StreamConversation conv;
+    auto events = run_chat_stream(t, {{"chat_session_id", "s"}}, {}, conv);
+    CHECK(t.calls.size() == 2);
+    CHECK(t.calls[1].url.find("/api/v0/chat/continue") != std::string::npos);
+    CHECK(t.calls[1].body.find("fallback_to_resume") != std::string::npos);
+    // part + " two" (snapshot dedup: second SET resends full "part two")
+    std::string text;
+    for (auto& e : events) if (!e.finish) text += e.text;
+    CHECK(text == "part two");
+    CHECK(events.back().finish && events.back().reason == "stop");
+}
+
+void test_driver_caps() {
+    using namespace g4f::deepseek;
+    // max_continue_attempts=0 -> error after first INCOMPLETE close
+    FakeTransport t;
+    t.script.push_back(sse(
+        "data: {\"v\":{\"response\":{\"message_id\":\"m\",\"status\":\"INCOMPLETE\","
+        "\"fragments\":[{\"type\":\"RESPONSE\",\"content\":\"x\"}]}}}\n\n"
+        "event: close\ndata: {}\n\n"));
+    StreamConversation conv;
+    DriverOptions opts;
+    opts.max_continue_attempts = 0;
+    bool threw = false;
+    try { run_chat_stream(t, {{"chat_session_id", "s"}}, {}, conv, opts); }
+    catch (const std::runtime_error& e) {
+        threw = std::string(e.what()).find("INCOMPLETE after 0") != std::string::npos;
+    }
+    CHECK(threw);
+    // missing session id
+    threw = false;
+    try { run_chat_stream(t, nlohmann::json::object(), {}, conv); }
+    catch (const std::invalid_argument&) { threw = true; }
+    CHECK(threw);
+    // negative cap
+    threw = false;
+    try {
+        DriverOptions bad;
+        bad.max_resume_attempts = -1;
+        run_chat_stream(t, {{"chat_session_id", "s"}}, {}, conv, bad);
+    } catch (const std::invalid_argument&) { threw = true; }
+    CHECK(threw);
+}
+
 int main() {
     test_errors();
     test_typing();
@@ -318,6 +422,10 @@ int main() {
     test_sse_frames();
     test_stream_state();
     test_har_auth();
+    test_driver_happy_path();
+    test_driver_code22();
+    test_driver_continue();
+    test_driver_caps();
     if (failures == 0) std::cout << "all tests passed\n";
     return failures == 0 ? 0 : 1;
 }

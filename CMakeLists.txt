@@ -21,6 +21,7 @@ add_library(g4f
   src/models.cpp
   src/http.cpp
   src/providers/deepseek.cpp
+  src/providers/driver.cpp
   src/providers/envelope.cpp
   src/providers/pow.cpp
   src/providers/pow_wasm3.cpp
