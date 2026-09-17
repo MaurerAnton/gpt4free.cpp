@@ -24,6 +24,7 @@ add_library(g4f
   src/providers/pow.cpp
   src/providers/pow_wasm3.cpp
   src/providers/sse.cpp
+  src/providers/stream.cpp
 )
 target_include_directories(g4f PUBLIC include)
 target_link_libraries(g4f PUBLIC CURL::libcurl nlohmann_json::nlohmann_json)

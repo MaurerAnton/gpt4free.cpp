@@ -13,6 +13,7 @@
 #include "g4f/providers/pow.hpp"
 #include "g4f/providers/pow_wasm3.hpp"
 #include "g4f/providers/sse.hpp"
+#include "g4f/providers/stream.hpp"
 #include "g4f/typing.hpp"
 #include "g4f/version.hpp"
 
@@ -212,6 +213,66 @@ void test_sse_frames() {
     CHECK(tail.size() == 1 && tail[0].first == "message");
 }
 
+void test_stream_state() {
+    using namespace g4f::deepseek;
+    using nlohmann::json;
+    CHECK(is_message_status("FINISHED") && !is_message_status("WIPX"));
+    CHECK(finish_reason_for("FINISHED") == "stop");
+    CHECK(finish_reason_for("CONTEXT_LENGTH_EXCEEDED") == "length");
+    CHECK(finish_reason_for("?") == "");
+    CHECK(fragment_kind(json{{"type", "THINK"}}).value_or("") == "reasoning");
+    CHECK(fragment_kind(json{{"type", "RESPONSE"}}).value_or("") == "response");
+    CHECK(!fragment_kind(json{{"type", "TIP"}}).has_value());
+    CHECK(fragment_kind(json::object()).value_or("") == "response");
+
+    // Snapshot with think + response fragments.
+    StreamState st;
+    StreamConversation conv;
+    auto chunks = process_stream_payload(
+        json::parse(R"({"v":{"response":{"message_id":"m1","status":"WIP","fragments":[{"type":"THINK","content":"hmm"},{"type":"RESPONSE","content":"hello"}]}}})"),
+        st, conv);
+    CHECK(chunks.size() == 2);
+    CHECK(chunks[0].reasoning && chunks[0].text == "hmm");
+    CHECK(!chunks[1].reasoning && chunks[1].text == "hello");
+    CHECK(conv.parent_message_id == "m1");
+    CHECK(st.status == "WIP");
+
+    // APPEND patch on the same response fragment emits only the delta.
+    auto more = process_stream_payload(
+        json::parse(R"({"p":"response/fragments/1/content","o":"APPEND","v":" world"})"),
+        st, conv);
+    CHECK(more.size() == 1 && more[0].text == " world");
+
+    // SET patch resends full content: only new tail emitted (dedup).
+    auto again = process_stream_payload(
+        json::parse(R"({"p":"response/fragments/1/content","o":"SET","v":"hello world"})"),
+        st, conv);
+    CHECK(again.empty());
+
+    // Status patch + BATCH.
+    StreamState st2;
+    StreamConversation c2;
+    auto fin = process_stream_payload(json::parse(R"({"p":"response/status","o":"SET","v":"FINISHED"})"),
+                                      st2, c2);
+    CHECK(fin.empty() && st2.status == "FINISHED");
+    auto batch = process_stream_payload(
+        json::parse(R"({"o":"BATCH","v":[{"p":"response/status","o":"SET","v":"WIP"}]})"),
+        st2, c2);
+    CHECK(batch.empty() && st2.status == "WIP");
+
+    // Full-message (resume) path.
+    StreamState st3;
+    StreamConversation c3;
+    auto full = process_full_message(
+        json::parse(R"({"response":{"fragments":[{"type":"RESPONSE","content":"done"}]}})"),
+        st3, c3);
+    CHECK(full.size() == 1 && full[0].text == "done");
+    bool threw = false;
+    try { process_full_message(json::parse(R"({"nope":1})"), st3, c3); }
+    catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+}
+
 int main() {
     test_errors();
     test_typing();
@@ -222,6 +283,7 @@ int main() {
     test_pow_runtime();
     test_envelope();
     test_sse_frames();
+    test_stream_state();
     if (failures == 0) std::cout << "all tests passed\n";
     return failures == 0 ? 0 : 1;
 }
