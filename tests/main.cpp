@@ -2,10 +2,12 @@
 // Upstream: https://github.com/xtekky/gpt4free (GPL-3.0)
 #include <cassert>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <string>
 
 #include "g4f/errors.hpp"
+#include "g4f/auth.hpp"
 #include "g4f/http.hpp"
 #include "g4f/models.hpp"
 #include "g4f/providers/deepseek.hpp"
@@ -273,6 +275,37 @@ void test_stream_state() {
     CHECK(threw);
 }
 
+void test_har_auth() {
+    using nlohmann::json;
+    // Synthetic HAR mirroring a chat.deepseek.com completion entry.
+    const char* har = R"({"log":{"entries":[
+      {"request":{"headers":[
+        {"name":"Host","value":"chat.deepseek.com"},
+        {"name":"Authorization","value":"Bearer tok123"},
+        {"name":"Cookie","value":"a=b"},
+        {"name":"Content-Length","value":"5"},
+        {"name":":method","value":"POST"}],
+        "cookies":[{"name":"session","value":"s3cr3t"}]}},
+      {"request":{"headers":[{"name":"Host","value":"other.example"}],
+        "cookies":[{"name":"x","value":"y"}]}}
+    ]}})";
+    const std::string path = "/tmp/opencode/g4f_test.har";
+    { std::ofstream f(path, std::ios::binary); f << har; }
+    g4f::HarAuth a = g4f::parse_har_file(path);
+    CHECK(a.cookies["session"] == "s3cr3t");
+    CHECK(a.headers["authorization"] == "Bearer tok123");
+    CHECK(a.headers.find("cookie") == a.headers.end());
+    CHECK(a.headers.find("content-length") == a.headers.end());
+    CHECK(a.headers.find(":method") == a.headers.end());
+    CHECK(a.cookies.find("x") == a.cookies.end()); // other domain ignored
+    // Missing file / dir: empty auth, no throw (upstream: pass/return).
+    CHECK(g4f::parse_har_file("/tmp/opencode/does-not-exist.har").cookies.empty());
+    CHECK(g4f::read_har_dir("/tmp/opencode/does-not-exist-dir").cookies.empty());
+    // Dir merge picks up the file.
+    g4f::HarAuth d = g4f::read_har_dir("/tmp/opencode");
+    CHECK(d.cookies["session"] == "s3cr3t");
+}
+
 int main() {
     test_errors();
     test_typing();
@@ -284,6 +317,7 @@ int main() {
     test_envelope();
     test_sse_frames();
     test_stream_state();
+    test_har_auth();
     if (failures == 0) std::cout << "all tests passed\n";
     return failures == 0 ? 0 : 1;
 }

@@ -17,6 +17,7 @@ if(NOT nlohmann_json_FOUND)
 endif()
 
 add_library(g4f
+  src/auth.cpp
   src/models.cpp
   src/http.cpp
   src/providers/deepseek.cpp
