@@ -9,8 +9,10 @@
 #include "g4f/http.hpp"
 #include "g4f/models.hpp"
 #include "g4f/providers/deepseek.hpp"
+#include "g4f/providers/envelope.hpp"
 #include "g4f/providers/pow.hpp"
 #include "g4f/providers/pow_wasm3.hpp"
+#include "g4f/providers/sse.hpp"
 #include "g4f/typing.hpp"
 #include "g4f/version.hpp"
 
@@ -145,6 +147,71 @@ void test_pow_runtime() {
     CHECK(dt < std::chrono::seconds(60));
 }
 
+void test_envelope() {
+    using namespace g4f::deepseek;
+    using nlohmann::json;
+    // ok shape
+    auto ok = unwrap_biz_response(
+        json{{"code", 0}, {"msg", "ok"},
+             {"data", {{"biz_code", 0}, {"biz_msg", "ok"}, {"biz_data", {{"id", "s1"}}}}}}, "ctx");
+    CHECK(ok.biz_data["id"] == "s1");
+    CHECK(extract_chat_session_id(ok.biz_data).value_or("") == "s1");
+    // current shape
+    auto cur = unwrap_biz_response(
+        json::parse(R"({"data":{"biz_data":{"chat_session":{"id":"abc"}}}})"), "ctx");
+    CHECK(extract_chat_session_id(cur.biz_data).value_or("") == "abc");
+    CHECK(!extract_chat_session_id(json(nullptr)).has_value());
+    // error shape
+    bool caught = false;
+    try {
+        unwrap_biz_response(json{{"code", 40002}, {"msg", "Missing Token"}}, "PoW challenge");
+    } catch (const std::runtime_error& e) {
+        caught = std::string(e.what()) ==
+                 "DeepSeek PoW challenge failed (40002): Missing Token";
+    }
+    CHECK(caught);
+    // allowed code 22 (resume path upstream)
+    auto r22 = unwrap_biz_response(json{{"code", 22}, {"msg", "x"}, {"data", nullptr}},
+                                   "resume", {"22"});
+    CHECK(r22.message == "x");
+    // invalid payload
+    caught = false;
+    try { unwrap_biz_response(json(42), "ctx"); }
+    catch (const std::runtime_error&) { caught = true; }
+    CHECK(caught);
+}
+
+void test_sse_frames() {
+    using namespace g4f::deepseek;
+    SseFrameParser p;
+    std::vector<SseFrame> got;
+    auto feed = [&](const std::string& l) {
+        auto v = p.feed_line(l);
+        got.insert(got.end(), v.begin(), v.end());
+    };
+    feed(": heartbeat");
+    feed("event: patch");
+    feed("data: {\"o\":\"APPEND\",\"v\":1}");
+    feed("");
+    CHECK(got.size() == 1);
+    CHECK(got[0].first == "patch");
+    CHECK(got[0].second["o"] == "APPEND");
+    feed("data: [DONE]");
+    feed("");
+    CHECK(got.size() == 1); // [DONE] yields nothing
+    bool threw = false;
+    try {
+        feed("data: {oops");
+        feed("");
+    } catch (const std::runtime_error&) { threw = true; }
+    CHECK(threw);
+    // default event type + flush
+    SseFrameParser q;
+    q.feed_line("data: {\"a\":true}");
+    auto tail = q.flush();
+    CHECK(tail.size() == 1 && tail[0].first == "message");
+}
+
 int main() {
     test_errors();
     test_typing();
@@ -153,6 +220,8 @@ int main() {
     test_sse();
     test_pow_protocol();
     test_pow_runtime();
+    test_envelope();
+    test_sse_frames();
     if (failures == 0) std::cout << "all tests passed\n";
     return failures == 0 ? 0 : 1;
 }

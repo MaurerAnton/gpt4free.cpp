@@ -20,8 +20,10 @@ add_library(g4f
   src/models.cpp
   src/http.cpp
   src/providers/deepseek.cpp
+  src/providers/envelope.cpp
   src/providers/pow.cpp
   src/providers/pow_wasm3.cpp
+  src/providers/sse.cpp
 )
 target_include_directories(g4f PUBLIC include)
 target_link_libraries(g4f PUBLIC CURL::libcurl nlohmann_json::nlohmann_json)
