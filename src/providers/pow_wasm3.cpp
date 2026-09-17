@@ -35,6 +35,7 @@ uint64_t f64bits(double v) {
 struct Wasm3PowSolver::Impl {
     IM3Environment env = nullptr;
     IM3Runtime runtime = nullptr;
+    IM3Module module = nullptr;
     IM3Function fn_malloc = nullptr; // __wbindgen_export_0
     IM3Function fn_stack = nullptr;  // __wbindgen_add_to_stack_pointer
     IM3Function fn_solve = nullptr;  // wasm_solve
@@ -53,6 +54,7 @@ Wasm3PowSolver::Wasm3PowSolver(const std::vector<uint8_t>& wasm_bytes)
     check(r, "m3_ParseModule");
     r = m3_LoadModule(impl_->runtime, module);
     check(r, "m3_LoadModule");
+    impl_->module = module;
     r = m3_LinkWASI(module); // port: linker.define_wasi()
     check(r, "m3_LinkWASI");
 
@@ -79,44 +81,41 @@ Wasm3PowSolver::~Wasm3PowSolver() {
 std::optional<long long> Wasm3PowSolver::grind(const std::string& challenge,
                                                const std::string& prefix,
                                                double difficulty) {
-    auto call2 = [this](IM3Function f, uint64_t a, uint64_t b) {
-        uint64_t argv[2] = {a, b};
-        check(m3_Call(f, 2, argv), "call");
-        uint64_t ret[1] = {0};
-        // m3_GetResults: fetch return value
-        check(m3_GetResults(f, 1, ret), "results");
-        return (uint32_t)ret[0];
+    auto malloc_str = [this](uint32_t len) {
+        check(m3_CallV(impl_->fn_malloc, len, (uint32_t)1), "malloc");
+        uint32_t ret = 0;
+        check(m3_GetResultsV(impl_->fn_malloc, &ret), "malloc results");
+        return ret;
     };
-    auto call1 = [this](IM3Function f, uint64_t a) {
-        uint64_t argv[1] = {a};
-        check(m3_Call(f, 1, argv), "call");
-        uint64_t ret[1] = {0};
-        check(m3_GetResults(f, 1, ret), "results");
-        return (uint32_t)ret[0];
+    auto stack_add = [this](int32_t delta) {
+        check(m3_CallV(impl_->fn_stack, (uint32_t)delta), "stack");
+        uint32_t ret = 0;
+        check(m3_GetResultsV(impl_->fn_stack, &ret), "stack results");
+        return ret;
     };
 
-    uint32_t mem_size = 0;
-    uint8_t* mem = m3_GetMemory(impl_->runtime, &mem_size, 0);
+    size_t mem_size = 0;
+    uint8_t* mem = m3_GetMemory(impl_->module, &mem_size, 0);
     if (!mem) throw std::runtime_error("no WASM memory");
 
     auto write_str = [&](const std::string& s) {
-        uint32_t ptr = call2(impl_->fn_malloc, s.size(), 1);
-        mem = m3_GetMemory(impl_->runtime, &mem_size, 0); // may grow
+        uint32_t ptr = malloc_str((uint32_t)s.size());
+        mem = m3_GetMemory(impl_->module, &mem_size, 0); // may grow
         if ((uint64_t)ptr + s.size() > mem_size)
             throw std::runtime_error("WASM memory write out of bounds");
         std::memcpy(mem + ptr, s.data(), s.size());
         return std::pair<uint32_t, uint32_t>(ptr, (uint32_t)s.size());
     };
 
-    uint32_t retptr = call1(impl_->fn_stack, (uint64_t)(uint32_t)(int32_t)-16);
+    uint32_t retptr = stack_add(-16);
     try {
         auto [cptr, clen] = write_str(challenge);
         auto [pptr, plen] = write_str(prefix);
-        uint64_t argv[6] = {retptr, cptr, clen, pptr, plen, f64bits(difficulty)};
-        // wasm_solve(...) -> void
-        check(m3_Call(impl_->fn_solve, 6, argv), "wasm_solve");
+        check(m3_CallV(impl_->fn_solve, retptr, cptr, clen, pptr, plen,
+                       difficulty),
+              "wasm_solve");
 
-        mem = m3_GetMemory(impl_->runtime, &mem_size, 0);
+        mem = m3_GetMemory(impl_->module, &mem_size, 0);
         if ((uint64_t)retptr + 16 > mem_size)
             throw std::runtime_error("WASM result read out of bounds");
         int32_t status = 0;
@@ -126,10 +125,10 @@ std::optional<long long> Wasm3PowSolver::grind(const std::string& challenge,
         std::memcpy(&value, mem + retptr + 8, 8);
         return (long long)value;
     } catch (...) {
-        call1(impl_->fn_stack, 16); // port: finally stack(+16)
+        stack_add(16); // port: finally stack(+16)
         throw;
     }
-    call1(impl_->fn_stack, 16);
+    stack_add(16);
     // unreachable (kept symmetric with upstream finally)
     return std::nullopt;
 }

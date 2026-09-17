@@ -34,6 +34,6 @@ Deps: libcurl, nlohmann/json (FetchContent if not installed).
 - [x] model registry (DeepSeek section)
 - [x] HTTP client + SSE reader
 - [x] DeepSeek payload builders (offline-testable)
-- [ ] DeepSeek PoW (`DeepSeekHashV1` WASM → native)
+- [x] DeepSeek PoW (`DeepSeekHashV1` via wasm3 + vendored blob; live-solve needs account, manual)
 - [ ] DeepSeek live session/completion I/O
 - [ ] remaining providers/models (on demand)

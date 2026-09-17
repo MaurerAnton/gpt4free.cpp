@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(gpt4free_cpp VERSION 0.1.0 LANGUAGES CXX)
+project(gpt4free_cpp VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,7 +40,6 @@ if(NOT wasm3_POPULATED)
 endif()
 file(GLOB WASM3_SOURCES CONFIGURE_DEPENDS
   ${wasm3_SOURCE_DIR}/source/m3_api_libc.c
-  ${wasm3_SOURCE_DIR}/source/m3_api_meta_wasi.c
   ${wasm3_SOURCE_DIR}/source/m3_api_wasi.c
   ${wasm3_SOURCE_DIR}/source/m3_bind.c
   ${wasm3_SOURCE_DIR}/source/m3_code.c
@@ -51,9 +50,12 @@ file(GLOB WASM3_SOURCES CONFIGURE_DEPENDS
   ${wasm3_SOURCE_DIR}/source/m3_function.c
   ${wasm3_SOURCE_DIR}/source/m3_info.c
   ${wasm3_SOURCE_DIR}/source/m3_module.c
+  ${wasm3_SOURCE_DIR}/source/m3_parse.c
+  ${wasm3_SOURCE_DIR}/source/m3_validate.c
 )
 add_library(wasm3 STATIC ${WASM3_SOURCES})
 target_include_directories(wasm3 PUBLIC ${wasm3_SOURCE_DIR}/source)
+target_compile_definitions(wasm3 PUBLIC d_m3HasWASI)
 target_link_libraries(g4f PUBLIC wasm3)
 
 add_executable(g4f_tests

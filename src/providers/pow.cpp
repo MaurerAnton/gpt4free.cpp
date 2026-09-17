@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "g4f/errors.hpp"
+#include "g4f/providers/deepseek.hpp"
 
 namespace g4f::deepseek {
 
